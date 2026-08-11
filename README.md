@@ -16,6 +16,8 @@ Inspired by the DeepSeek-R1 training paradigm, this project explores reasoning-o
 **Benchmarks:** GSM8K, MATH  
 **Frameworks:** [veRL](https://github.com/volcengine/verl) + vLLM
 
+🤗 Best checkpoint (SFT + GRPO, Qwen3-0.6B) is on the Hub: [Linyuana/qwen3-0.6b-grpo-math-reasoning](https://huggingface.co/Linyuana/qwen3-0.6b-grpo-math-reasoning)
+
 ---
 
 ## Overview
@@ -50,6 +52,16 @@ Reward is purely rule-based (regex-extract `<answer>`, normalize, compare to gro
 | **SFT + GRPO** | **67.7** | **85.0** | **48.8** | **79.2** | mid |
 
 *Eval protocol: 500 held-out samples per dataset, temperature=0.8/top_p=0.95, 8 samples/question. Same rule-reward scorer used in training and eval. Full breakdown incl. all ablations: [docs/experiments.md](docs/experiments.md).*
+
+The **SFT + GRPO** checkpoint (the best-performing one above) is published on Hugging Face: [Linyuana/qwen3-0.6b-grpo-math-reasoning](https://huggingface.co/Linyuana/qwen3-0.6b-grpo-math-reasoning). Load it directly with `transformers`:
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model_id = "Linyuana/qwen3-0.6b-grpo-math-reasoning"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
+```
 
 ![Method comparison](docs/images/method_comparison_pass1.png)
 
