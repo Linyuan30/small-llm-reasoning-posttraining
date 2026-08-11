@@ -1,8 +1,20 @@
-# LLM RL Reasoning
+# Small LLM Reasoning Post-Training
 
-**A reproduction study on improving mathematical reasoning in small LLMs via SFT and RL with verifiable rewards (RLVR), following the DeepSeek-R1 recipe.**
+A systematic study of enhancing reasoning capabilities in small language models through post-training techniques, including:
 
-Base model: Qwen3-0.6B/1.7B-Base &nbsp;|&nbsp; Tasks: GSM8K, MATH &nbsp;|&nbsp; Framework: [veRL](https://github.com/volcengine/verl) + vLLM
+- Cold-start Supervised Fine-Tuning (SFT)
+- Direct Preference Optimization (DPO)
+- Proximal Policy Optimization (PPO)
+- Group Relative Policy Optimization (GRPO)
+- Reinforcement Learning with Verifiable Rewards (RLVR)
+
+This project investigates how small-scale language models acquire mathematical reasoning abilities through supervised learning and reinforcement learning. Experiments are conducted on Qwen3-0.6B/1.7B-Base models with GSM8K and MATH benchmarks.
+
+Inspired by the DeepSeek-R1 training paradigm, this project explores reasoning-oriented post-training pipelines using verifiable rewards.
+
+**Base Models:** Qwen3-0.6B/1.7B-Base  
+**Benchmarks:** GSM8K, MATH  
+**Frameworks:** [veRL](https://github.com/volcengine/verl) + vLLM
 
 ---
 
