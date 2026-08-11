@@ -1,42 +1,59 @@
-# GRPO 分析
+# GRPO Analysis
 
-## 为什么选它作为重点算法
+## Background
 
-GRPO（Group Relative Policy Optimization）是 DeepSeek-Math / DeepSeek-R1 系列工作里用的核心算法，思路是对同一个 prompt 采样一组输出（这里组内大小取 8），用组内 reward 的相对排名/归一化值直接作为 advantage，不需要额外训练一个 critic 网络。相比 PPO，实现更简单，也不用担心 value 函数训练不稳定的问题——这一点在 [ppo_analysis.md](ppo_analysis.md) 里的崩溃复盘中有更详细的对比分析。
+GRPO (Group Relative Policy Optimization) is the core RL algorithm behind DeepSeek-Math / DeepSeek-R1: instead of learning a separate value function, it samples a group of outputs per prompt (8 here) and uses the within-group relative ranking of rewards directly as the advantage signal. It was run under the same SFT initialization and rule-based reward as PPO, so the two are directly comparable.
 
-## 配置
+## Setup
 
-以 SFT 冷启动 checkpoint（3 epoch 版本）为初始化权重，用 veRL 的 `main_ppo` 入口，把 `algorithm.adv_estimator` 设为 `grpo`，4×GPU FSDP + vLLM 做 rollout。关键超参：`train_batch_size=256`，`ppo_mini_batch_size=64`，`rollout.n=8`（组内采样数），`actor_lr=1e-6`，`kl_loss_coef=0.001`（`low_var_kl`），`max_prompt_length=512`，`max_response_length=1024`，训练 4 个 epoch（116 steps）。Reward 用 `reward/rule_reward.py` 的规则打分（答案正确性 + 格式）。
+Initialized from the 3-epoch SFT cold-start checkpoint, using veRL's `main_ppo` entrypoint with `algorithm.adv_estimator=grpo`, 4-GPU FSDP + vLLM rollout. Key hyperparameters: `train_batch_size=256`, `ppo_mini_batch_size=64`, `rollout.n=8` (group size), `actor_lr=1e-6`, `kl_loss_coef=0.001`, `max_prompt_length=512`, `max_response_length=1024`, 4 epochs (116 steps). Reward: `reward/rule_reward.py` (answer correctness + format).
 
-## 结果
+## Result
 
-| 数据集 | pass@1 | pass@4 | pass@8 |
+| Dataset | pass@1 | pass@4 | pass@8 |
 | --- | --- | --- | --- |
 | GSM8K | 67.7% | 80.4% | 85.0% |
 | MATH | 48.8% | 71.5% | 79.2% |
 
-训练过程中 validation reward 从初始 0.129 单调爬升到最终 0.563，`response_length` 全程稳定在 100-125 区间的窄幅波动，没有出现长度失控或 reward 塌陷。相比 SFT only，pass@1 提升幅度是所有方法里最大的（GSM8K +28.8pp，MATH +19.8pp），也是训练最稳定的一个。
+Validation reward rose monotonically from 0.129 to 0.563 over training, and `response_length` stayed in a narrow 100-125 range throughout — no length blowup, no reward collapse. This is the largest pass@1 gain of any method tested (GSM8K +28.8pp, MATH +19.8pp over SFT-only) and the only RL run in this project that trained without any instability requiring intervention.
 
-训练耗时：4 张卡、4 个 epoch、116 steps，约 2 小时，介于 DPO（低）和 PPO（高，含 critic 前向反向）之间。
+Training cost: 4 GPUs, 4 epochs, 116 steps, ~2 hours — between DPO (cheap) and PPO (more expensive due to the critic's extra forward/backward pass).
 
-## 消融：组内采样数（group size）
+## Why GRPO Trained Cleanly Here
 
-其余超参不变，只调 `rollout.n`（4 / 8 / 16），2 卡训练。
+The most direct comparison is against PPO, which — under matched initialization and reward — collapsed on its first run (see [ppo_analysis.md](ppo_analysis.md)). GRPO's advantage estimate comes from ranking rollouts within the same group, so it never depends on a value function that has to be "warmed up" from a near-random initial state. That specific failure mode (early, noisy advantage estimates from an undertrained critic reinforcing a bad direction) doesn't have an analog in GRPO's update rule.
 
-| group size | GSM8K pass@1 | GSM8K pass@8 | MATH pass@1 | MATH pass@8 |
+This is a comparison under one specific setup — small model, sparse rule-based reward, short training run — not a general claim that GRPO is always more stable than PPO. The trade-off GRPO makes is rollout cost: estimating a group baseline requires sampling `n=8` completions per prompt, which is more expensive per training step than PPO's `rollout.n=1`.
+
+## Ablation: Group Size
+
+Same hyperparameters, only `rollout.n` (group size) varied — 4 / 8 / 16, on 2 GPUs.
+
+| Group size | GSM8K pass@1 | GSM8K pass@8 | MATH pass@1 | MATH pass@8 |
 | --- | --- | --- | --- | --- |
-| 4 | **68.0%** | 86.2% | **47.9%** | 79.8% |
-| 8（主实验） | 67.7% | 85.0% | 48.8% | 79.2% |
+| 4 | 68.0% | 86.2% | 47.9% | 79.8% |
+| 8 (main run) | 67.7% | 85.0% | 48.8% | 79.2% |
 | 16 | 69.0% | 84.3% | 32.1% | 59.0% |
 
-n=4 跟 n=8 几乎持平，GSM8K 上甚至还略高一点，说明在 GSM8K 这种 reward 信号比较清晰的任务上，4 个样本就足够估计出组内相对排名，不需要堆到 8。而 n=16 在 GSM8K 上继续小幅提升的同时，MATH 上却明显下降（48.8%→32.1%），且训练过程中的 `val reward@1` 是三组里最高的（0.596）——这个组合看起来像是在 GSM8K（训练用的数据集）上过拟合得更充分，但没能等比例迁移到分布不同、难度更高的 MATH 上。
+`n=4` performs essentially on par with `n=8` (marginally higher on GSM8K), suggesting that on this task, 4 samples are already enough to estimate a useful relative ranking within the group — increasing to 8 doesn't add much. `n=16` continues to improve slightly on GSM8K but drops sharply on MATH (48.8% → 32.1%), while also showing the highest final `val_reward@1` (0.596) of the three settings. That combination — best on the training distribution, worst on the held-out harder task — looks consistent with the larger group size converging more tightly to GSM8K-specific patterns rather than generalizing.
 
-这个结果的实践含义是：更小的 group size 意味着更低的 rollout 开销（生成样本数减半），在算力有限时适当降低 group size 是划算的；而一味增大 group size 未必有收益，还可能以牺牲跨任务泛化为代价，需要结合多个评估集综合判断，不能只看训练任务本身的 reward 曲线。
+Practically: a smaller group size halves rollout cost with no measurable loss here, so under compute constraints it's the better default. Scaling group size up is not free — it doesn't reliably transfer beyond the task it was tuned on.
 
-（n=16 那组训练过程中曾经中断过一次，疑似 OOM 或会话终止，从 `global_step_70` 恢复后继续跑完，不是一次连续无中断的训练，这是需要如实说明的局限性。）
+(The `n=16` run was also interrupted once mid-training — likely OOM or a session timeout — and resumed from `global_step_70`, so it wasn't a single uninterrupted run like the other two. Noted for completeness; it doesn't change the direction of the result but is a caveat on how clean the comparison is.)
 
-训练曲线见 `docs/images/grpo_group_size_training_curves.png`，柱状图见 `docs/images/grpo_group_size_ablation.png`。
+![GRPO group size training curves](images/grpo_group_size_training_curves.png)
+
+![GRPO group size ablation](images/grpo_group_size_ablation.png)
+
+## Summary of Findings
+
+| Question | Observation |
+| --- | --- |
+| How did GRPO compare to PPO/DPO? | Best result and most stable training of all three RL methods under matched setup |
+| Why did it avoid PPO's failure mode? | No learned value function, so no early-training regime where the baseline itself is unreliable — specific to this comparison, not a general law |
+| Does a larger group size help? | Not reliably — `n=4` matches `n=8`, and `n=16` trades MATH generalization for a marginal GSM8K gain |
+| Cost trade-off vs PPO | Higher rollout cost per step (8x completions per prompt), but no critic to train |
 
 ---
 
-原始数据与训练日志路径见 [experiments.md](experiments.md) 实验③及其消融小节。GRPO vs PPO 的完整对比分析见 [ppo_analysis.md](ppo_analysis.md)。
+Raw logs and evaluation JSON paths: [experiments.md](experiments.md), Experiment ③ and its ablation subsection. Full GRPO vs PPO comparison: [ppo_analysis.md](ppo_analysis.md).

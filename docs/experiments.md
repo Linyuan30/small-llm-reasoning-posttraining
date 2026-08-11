@@ -3,7 +3,7 @@
 完整的实验配置、结果数据与逐条分析都记在这里，是 [README](../README.md) 里那张结果表格背后的全部细节。三个方法各自的专题复盘（原理、踩过的坑、消融实验）拆到了单独的文档里，读法建议：
 
 - 先看 README 的 Results 和 Key Findings 有个整体印象
-- 想深入某个方法的具体分析和踩坑过程，看 [sft_analysis.md](sft_analysis.md) / [grpo_analysis.md](grpo_analysis.md) / [ppo_analysis.md](ppo_analysis.md)
+- 想深入某个方法的具体分析和踩坑过程，看 [sft_analysis.md](sft_analysis.md) / [grpo_analysis.md](grpo_analysis.md) / [ppo_analysis.md](ppo_analysis.md) / [dpo_analysis.md](dpo_analysis.md)
 - 想看完整的原始实验数据、每一版消融的详细配置，就在本文档里按实验编号查
 
 评估口径统一说明：所有阶段均使用 `eval/eval_pass_at_k.py` + `reward/rule_reward.py` 的同一套打分逻辑（训练/评估同源），保证跨阶段结果可比。
