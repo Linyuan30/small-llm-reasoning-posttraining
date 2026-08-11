@@ -1,9 +1,23 @@
-# 实验结果记录
+# Experiment Log
 
-> 对应 `01_motivation_and_design.md` 第8节工程规范里规划的 `experiment_log.md`，用于记录所有阶段的实验配置、结果与结论。
-> 核心结果表参见 `01_motivation_and_design.md` 第5.6节"方法对比总表"，本文档提供每次实验的详细数据来源和分析，两者配合查看。
->
-> 评估口径统一说明：所有阶段均使用 `train/eval/eval_pass_at_k.py` + `train/reward/rule_reward.py` 的同一套打分逻辑（训练/评估同源），保证跨阶段结果可比。
+完整的实验配置、结果数据与逐条分析都记在这里，是 [README](../README.md) 里那张结果表格背后的全部细节。三个方法各自的专题复盘（原理、踩过的坑、消融实验）拆到了单独的文档里，读法建议：
+
+- 先看 README 的 Results 和 Key Findings 有个整体印象
+- 想深入某个方法的具体分析和踩坑过程，看 [sft_analysis.md](sft_analysis.md) / [grpo_analysis.md](grpo_analysis.md) / [ppo_analysis.md](ppo_analysis.md)
+- 想看完整的原始实验数据、每一版消融的详细配置，就在本文档里按实验编号查
+
+评估口径统一说明：所有阶段均使用 `eval/eval_pass_at_k.py` + `reward/rule_reward.py` 的同一套打分逻辑（训练/评估同源），保证跨阶段结果可比。
+
+## 框架说明
+
+训练主体是直接使用官方 [veRL](https://github.com/volcengine/verl) v0.4.0：SFT 用它的 `fsdp_sft_trainer`，GRPO/PPO 用它的 `main_ppo`（`algorithm.adv_estimator` 分别设为 `grpo`/`gae`）。DPO 单独用 `trl.DPOTrainer`（不在 veRL 内）。本仓库不携带 veRL 源码，按 README 说明 `pip install verl==0.4.0` 后，用 `git apply patches/verl-v0.4.0.patch` 打上以下基础设施补丁即可，没有任何算法逻辑改动：
+
+| 文件 | 改动内容 |
+| --- | --- |
+| `verl/trainer/config/{ppo,sft}_trainer.yaml` | 新增 `trainer.wandb_proxy` 配置项（wandb 需走代理连外网，且不能污染影响 vLLM 等其他 HTTP 请求的全局 `http_proxy`） |
+| `verl/trainer/fsdp_sft_trainer.py` | `Tracking(...)` 初始化时传入完整 config，让 wandb 记录训练超参 |
+| `verl/utils/tracking.py` | `wandb_proxy` 取值方式改为链式 `.get()`，避免 `config=None` 时报错 |
+| `verl/workers/reward_manager/naive.py` | 用 `inspect.signature` 检测自定义 `compute_score` 是否支持 `response_length_ratio` 参数，支持则传入——这是 [PPO 崩溃修复](ppo_analysis.md)里截断惩罚能生效的关键一环 |
 
 ---
 
