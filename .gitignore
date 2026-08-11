@@ -1,0 +1,39 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Data (regenerate via data/scripts/*.py, do not commit large processed files)
+data/processed/
+data/raw/
+
+# Model checkpoints (huge, hosted on HuggingFace Hub instead, see README)
+models/
+checkpoints/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+
+# Evaluation raw outputs (per-sample details, only keep aggregated summaries under eval/results/)
+eval/results/*.json
+eval/results/*.json.bak_*
+!eval/results/summary*.json
+!eval/results/summary*.csv
+
+# Training run artifacts
+logs/
+outputs/
+wandb/
+*.log
+
+# Third-party framework source (installed via pip/git, see patches/)
+verl/
+
+# Env / IDE
+.env
+.venv/
+venv/
+.vscode/
+.idea/
+.DS_Store

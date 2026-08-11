@@ -1,0 +1,112 @@
+diff --git a/verl/trainer/config/ppo_trainer.yaml b/verl/trainer/config/ppo_trainer.yaml
+index 929ffd4..de78ca6 100644
+--- a/verl/trainer/config/ppo_trainer.yaml
++++ b/verl/trainer/config/ppo_trainer.yaml
+@@ -250,6 +250,8 @@ trainer:
+   project_name: verl_examples
+   experiment_name: gsm8k
+   logger: [ 'console', 'wandb' ]
++  # 通过代理访问 wandb（避免污染全局 http(s)_proxy 影响其他网络请求）
++  wandb_proxy: null
+   log_val_generations: 0
+   rollout_data_dir: null # directory for logging the rollout data, no dump if null
+   validation_data_dir: null # directory for logging the validation data, no dump if null
+diff --git a/verl/trainer/config/sft_trainer.yaml b/verl/trainer/config/sft_trainer.yaml
+index 71feead..caeb56c 100644
+--- a/verl/trainer/config/sft_trainer.yaml
++++ b/verl/trainer/config/sft_trainer.yaml
+@@ -57,6 +57,8 @@ trainer:
+   total_epochs: 4
+   total_training_steps: null
+   logger: [ 'console', 'wandb' ]
++  # 通过代理访问 wandb（避免污染全局 http(s)_proxy 影响其他网络请求）
++  wandb_proxy: null
+   seed: 1
+ 
+   save_freq: -1
+diff --git a/verl/trainer/fsdp_sft_trainer.py b/verl/trainer/fsdp_sft_trainer.py
+index e3f1e70..ad7cfd2 100644
+--- a/verl/trainer/fsdp_sft_trainer.py
++++ b/verl/trainer/fsdp_sft_trainer.py
+@@ -496,10 +496,13 @@ class FSDPSFTTrainer:
+ 
+         # TODO: add a unified tracking
+         if rank == 0:
++            from omegaconf import OmegaConf
++
+             tracking = Tracking(
+                 project_name=self.config.trainer.project_name,
+                 experiment_name=self.config.trainer.experiment_name,
+                 default_backend=self.config.trainer.logger,
++                config=OmegaConf.to_container(self.config, resolve=True),
+             )
+ 
+         global_step = 0
+diff --git a/verl/utils/tracking.py b/verl/utils/tracking.py
+index a2d658b..c46f0c1 100644
+--- a/verl/utils/tracking.py
++++ b/verl/utils/tracking.py
+@@ -52,8 +52,9 @@ class Tracking:
+             import wandb
+ 
+             settings = None
+-            if config["trainer"].get("wandb_proxy", None):
+-                settings = wandb.Settings(https_proxy=config["trainer"]["wandb_proxy"])
++            wandb_proxy = (config or {}).get("trainer", {}).get("wandb_proxy", None)
++            if wandb_proxy:
++                settings = wandb.Settings(https_proxy=wandb_proxy)
+             wandb.init(project=project_name, name=experiment_name, config=config, settings=settings)
+             self.logger["wandb"] = wandb
+ 
+diff --git a/verl/workers/reward_manager/naive.py b/verl/workers/reward_manager/naive.py
+index 59ad618..c53189d 100644
+--- a/verl/workers/reward_manager/naive.py
++++ b/verl/workers/reward_manager/naive.py
+@@ -12,6 +12,7 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++import inspect
+ from collections import defaultdict
+ 
+ import torch
+@@ -28,6 +29,16 @@ class NaiveRewardManager:
+         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
+         self.compute_score = compute_score or default_compute_score
+         self.reward_fn_key = reward_fn_key
++        # 仅当自定义 compute_score 显式声明接受 response_length_ratio（或使用
++        # **kwargs）时才传入该参数，避免破坏不认识这个参数的第三方/内置 reward
++        # 函数（如 default_compute_score 签名是固定的，没有 **kwargs）。
++        try:
++            sig = inspect.signature(self.compute_score)
++            self._score_accepts_length_ratio = any(
++                p.kind == inspect.Parameter.VAR_KEYWORD or p.name == "response_length_ratio" for p in sig.parameters.values()
++            )
++        except (TypeError, ValueError):
++            self._score_accepts_length_ratio = False
+ 
+     def __call__(self, data: DataProto, return_dict=False):
+         """We will expand this function gradually based on the available datasets"""
+@@ -68,12 +79,21 @@ class NaiveRewardManager:
+ 
+             extra_info = data_item.non_tensor_batch.get("extra_info", None)
+ 
+-            score = self.compute_score(
++            score_kwargs = dict(
+                 data_source=data_source,
+                 solution_str=response_str,
+                 ground_truth=ground_truth,
+                 extra_info=extra_info,
+             )
++            if self._score_accepts_length_ratio:
++                # response_ids 的最后一维即 padding 后的 max_response_length（所有
++                # 样本在这一维长度一致），据此算出当前有效长度相对上限的比例，供
++                # 自定义 reward 函数（如 rule_reward.py）识别"疑似被截断"的样本并
++                # 加重惩罚，用于抑制 PPO 训练中 response length 爆炸的正反馈循环。
++                max_response_length = response_ids.shape[-1]
++                score_kwargs["response_length_ratio"] = float(valid_response_length) / max(1, max_response_length)
++
++            score = self.compute_score(**score_kwargs)
+ 
+             if isinstance(score, dict):
+                 reward = score["score"]
