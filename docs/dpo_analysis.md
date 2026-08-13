@@ -12,12 +12,25 @@ Training used `trl.DPOTrainer`, 4-GPU `accelerate launch`, `learning_rate=5e-7`,
 
 ## Result
 
+**Base route (Qwen3-0.6B-Base):**
+
 | Dataset | pass@1 | pass@4 | pass@8 |
 | --- | --- | --- | --- |
 | GSM8K | 39.0% | 66.9% | 78.0% |
 | MATH | 29.8% | 57.3% | 69.0% |
 
-This is close to a no-op relative to SFT-only (GSM8K 38.9% → 39.0%, MATH 29.0% → 29.8%) — a fraction of a percentage point, compared to GRPO's +28.8pp / +19.8pp under the same starting checkpoint. The training dynamics themselves looked healthy: loss dropped from 0.690 to 0.682, and `rewards/accuracies` (the fraction of pairs where the chosen completion scores higher than rejected under the trained model) rose from ~50% to 62-65%. So the model clearly learned *something* from the preference pairs — it just didn't translate into more correct answers.
+This is close to a no-op relative to SFT-only (GSM8K 38.9% → 39.0%, MATH 29.0% → 29.8%) — a fraction of a percentage point, compared to GRPO's +28.8pp / +19.8pp under the same starting checkpoint. The training dynamics themselves looked healthy: loss dropped from 0.690 to 0.682, and `rewards/accuracies` rose from ~50% to 62-65%. So the model clearly learned *something* from the preference pairs — it just didn't translate into more correct answers.
+
+**Instruct routes (same hyperparameters, Instruct base):**
+
+| Route | Dataset | SFT start | DPO result | Change |
+| --- | --- | ---: | ---: | ---: |
+| 0.6B-Instruct | GSM8K | 37.5% | 37.7% | +0.2pp |
+| 0.6B-Instruct | MATH | 18.5% | 27.7% | +9.2pp |
+| 1.7B-Instruct | GSM8K | 55.7% | 56.0% | +0.3pp |
+| 1.7B-Instruct | MATH | 28.3% | 40.8% | +12.5pp |
+
+The pattern is the same: DPO returns pass@1 almost exactly to SFT-start levels. The MATH numbers show slightly larger gains than GSM8K, but given that these models start from a very low MATH SFT pass@1 (18-28%) while MATH pass@8 stays much higher (49-62%), the small absolute gain likely reflects the same ceiling effect — the model could already produce correct MATH answers with some probability, DPO slightly improved extraction reliability rather than introducing new solution paths.
 
 ![DPO training curve](images/dpo_training_curve.png)
 
@@ -39,10 +52,11 @@ Training cost was the lowest of all four methods: 3,171 pairs, 49 steps, ~3 minu
 
 | Question | Observation |
 | --- | --- |
-| Did DPO improve over SFT-only? | Marginally (+0.1pp GSM8K, +0.8pp MATH pass@1) — not a meaningful gain |
+| Did DPO improve over SFT-only? | Marginally (+0.1pp GSM8K, +0.8pp MATH pass@1 on Base) — not a meaningful gain |
 | Did the model learn anything during training? | Yes — internal preference accuracy rose from ~50% to 62-65%, so the optimization itself worked |
 | Why didn't that transfer to pass@k? | Preference pairs are self-sampled from the same SFT policy, so "chosen" is capped by what that policy could already produce; the RL methods aren't bounded this way |
 | Is DPO's low cost worth it here? | Only as a baseline / cheap post-hoc correction step, not as a primary capability-improvement method for this task |
+| Does the pattern hold on Instruct routes? | Yes — both 0.6B and 1.7B Instruct DPO results fall back to within ~0.3pp of their SFT starting points on GSM8K; the structural ceiling problem is route-agnostic |
 
 ---
 

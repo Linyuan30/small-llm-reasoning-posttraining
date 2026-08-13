@@ -10,14 +10,29 @@ Initialized from the 3-epoch SFT cold-start checkpoint, using veRL's `main_ppo` 
 
 ## Result
 
+**Base route (Qwen3-0.6B-Base):**
+
 | Dataset | pass@1 | pass@4 | pass@8 |
 | --- | --- | --- | --- |
 | GSM8K | 67.7% | 80.4% | 85.0% |
 | MATH | 48.8% | 71.5% | 79.2% |
 
-Validation reward rose monotonically from 0.129 to 0.563 over training, and `response_length` stayed in a narrow 100-125 range throughout — no length blowup, no reward collapse. This is the largest pass@1 gain of any method tested (GSM8K +28.8pp, MATH +19.8pp over SFT-only) and the only RL run in this project that trained without any instability requiring intervention.
+Validation reward rose monotonically from 0.129 to 0.563 over training, and `response_length` stayed in a narrow 100-125 range throughout — no length blowup, no reward collapse. This is the largest pass@1 gain of any method tested on the Base route (GSM8K +28.8pp, MATH +19.8pp over SFT-only) and the only RL run on the Base route that trained without any instability requiring intervention.
 
 Training cost: 4 GPUs, 4 epochs, 116 steps, ~2 hours — between DPO (cheap) and PPO (more expensive due to the critic's extra forward/backward pass).
+
+**Instruct routes (same hyperparameters, Instruct base):**
+
+| Model | Dataset | SFT start (pass@1) | GRPO (pass@1) | RL gain |
+| --- | --- | ---: | ---: | ---: |
+| 0.6B-Instruct | GSM8K | 37.5% | **77.6%** | +40.1pp |
+| 0.6B-Instruct | MATH | 18.5% | **69.3%** | +50.8pp |
+| 1.7B-Instruct | GSM8K | 55.7% | **86.1%** | +30.4pp |
+| 1.7B-Instruct | MATH | 28.3% | **73.6%** | +45.3pp |
+
+Both Instruct routes entered GRPO at roughly the same pass@1 as the Base route (~38% for 0.6B, ~56% for 1.7B), but the RL gain was substantially larger. The 1.7B Instruct + GRPO result (86.1% GSM8K / 73.6% MATH, pass@8 reaching 95.6% / 93.8%) is the highest result in this project across all methods and model sizes.
+
+![Instruct vs Base RL gain](images/instruct_vs_base_rl_gain.png)
 
 ## Why GRPO Trained Cleanly Here
 
@@ -53,6 +68,7 @@ Practically: a smaller group size halves rollout cost with no measurable loss he
 | Why did it avoid PPO's failure mode? | No learned value function, so no early-training regime where the baseline itself is unreliable — specific to this comparison, not a general law |
 | Does a larger group size help? | Not reliably — `n=4` matches `n=8`, and `n=16` trades MATH generalization for a marginal GSM8K gain |
 | Cost trade-off vs PPO | Higher rollout cost per step (8x completions per prompt), but no critic to train |
+| How did Instruct routes compare? | Both entered GRPO from roughly the same SFT pass@1 as Base (~38%), but RL gain was larger: 0.6B Instruct reached +40pp/+51pp vs Base's +29pp/+20pp; 1.7B Instruct GRPO hit 86.1%/73.6% (project high) |
 
 ---
 
