@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# P1 消融实验（受控对照）：PPO KL_LOSS_COEF = 0.01，但改用 2 卡（与 kl0.005/kl0.02 消融组卡数对齐）
-# 目的：排除"2卡 vs 4卡"这一未受控变量，验证 v3 主实验（4卡）中 step21-28 length 冲高
-#       到底是 KL 系数本身导致，还是训练随机性 + 卡数差异共同作用的结果。
-# 对照组：
-#   - KL=0.01, 4卡（v3主实验，未受控） -> docs/实验结果.md 实验④ v3
-#   - KL=0.005, 2卡 -> _ablation_ppo_kl005.sh
-#   - KL=0.02,  2卡 -> _ablation_ppo_kl02.sh
-#   - KL=0.01, 2卡（本脚本，受控对照）
+# Controlled ablation: PPO KL_LOSS_COEF = 0.01, but on 2 GPUs
+# (matches the GPU count of the kl0.005 and kl0.02 ablation runs).
+#
+# Purpose: rule out "2-GPU vs 4-GPU" as an uncontrolled variable and check
+# whether the step-21-28 length spike in the v3 main run (4 GPUs) is driven
+# by the KL coefficient itself or by a combination of training stochasticity
+# and GPU-count differences.
+#
+# Control group matrix:
+#   KL=0.01, 4-GPU (v3 main, not matched) -> docs/experiments.md exp-4 v3
+#   KL=0.005, 2-GPU                        -> ablation_ppo_kl005.sh
+#   KL=0.02,  2-GPU                        -> ablation_ppo_kl02.sh
+#   KL=0.01,  2-GPU (this script, matched) -> current
 set -o pipefail
-# 本脚本位于 training/ablation/，仓库根目录在其上两级
+# This script lives in training/ablation/; the repo root is two levels up
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 

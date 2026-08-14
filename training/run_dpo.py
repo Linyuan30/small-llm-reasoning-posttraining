@@ -1,12 +1,14 @@
 # Copyright (c) 2026
 #
-# DPO 训练脚本（作为 off-policy 基线，对应 docs/流程.md 5.5节 / docs/方案计划.md Week5）
+# DPO training script (off-policy baseline).
 #
-# 使用 `trl` 库的 DPOTrainer 实现（veRL 本身专注 on-policy RL，不内置标准 DPO trainer）。
-# 偏好对数据来自 SFT 模型的 rejection sampling（见 data/scripts/build_dpo_pairs.py），
-# 数据格式为 jsonl，每行包含 {"prompt": ..., "chosen": ..., "rejected": ...}
+# Uses the DPOTrainer from the `trl` library (veRL focuses on on-policy RL
+# and does not include a standard DPO trainer).
+# Preference pairs are built by rejection-sampling from the SFT model
+# (see data/scripts/build_dpo_pairs.py); each line is a JSON object:
+#   {"prompt": ..., "chosen": ..., "rejected": ...}
 #
-# 用法（单机多卡，accelerate 或 torchrun 均可）：
+# Usage (single-node multi-GPU, accelerate or torchrun both work):
 #   accelerate launch --num_processes 4 run_dpo.py \
 #       --model_path ../models/sft_coldstart/qwen3-0.6b \
 #       --data_path ../data/processed/gsm8k_dpo_pairs.jsonl \
@@ -25,12 +27,12 @@ from trl import DPOConfig, DPOTrainer
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", required=True, help="SFT 冷启动模型路径（policy 与 reference 的初始化权重）")
-    parser.add_argument("--data_path", required=True, help="DPO 偏好对数据 jsonl 路径")
+    parser.add_argument("--model_path", required=True, help="SFT cold-start checkpoint (init weights for policy and reference)")
+    parser.add_argument("--data_path", required=True, help="path to DPO preference-pair jsonl")
     parser.add_argument("--output_dir", required=True)
-    parser.add_argument("--eval_data_path", default=None, help="可选的验证集偏好对数据")
+    parser.add_argument("--eval_data_path", default=None, help="optional validation preference-pair data")
     parser.add_argument("--learning_rate", type=float, default=5e-7)
-    parser.add_argument("--beta", type=float, default=0.1, help="DPO 温度系数")
+    parser.add_argument("--beta", type=float, default=0.1, help="DPO temperature coefficient")
     parser.add_argument("--num_train_epochs", type=float, default=1.0)
     parser.add_argument("--per_device_train_batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
@@ -55,8 +57,9 @@ def main():
         args.model_path,
         torch_dtype=torch.bfloat16 if args.bf16 else torch.float32,
     )
-    # DPO 需要一个固定的 reference 模型；trl 支持传 None 让内部自动 deepcopy，
-    # 但对大模型显存更友好的做法是显式加载一份只读的 ref 模型。
+    # DPO requires a frozen reference model. trl supports passing None to let
+    # it deepcopy internally, but explicitly loading a separate read-only copy
+    # is more memory-efficient for large models.
     ref_model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
         torch_dtype=torch.bfloat16 if args.bf16 else torch.float32,

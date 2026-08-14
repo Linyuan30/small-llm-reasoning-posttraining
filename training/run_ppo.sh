@@ -1,64 +1,74 @@
 #!/usr/bin/env bash
-# PPO (完整 RLHF: Actor + Critic + Reward + Reference) | Qwen3-0.6B/1.7B
+# PPO (full RLHF: Actor + Critic + Reward + Reference) | Qwen3-0.6B/1.7B
 # FSDP training + vLLM rollout | 8x A100 80G
 #
-# 对应 docs/方案计划.md Week3-4：PPO 跑通（四模型协同），KL系数消融实验
+# Usage:
+#   bash run_ppo.sh <nproc_per_node> [extra hydra overrides...]
 #
-# 用法：
-#   bash run_ppo.sh <nproc_per_node> [其他 hydra 覆盖参数...]
+# Key env-var overrides:
+#   MODEL_PATH        actor/critic init checkpoint (typically the SFT cold-start ckpt)
+#   KL_LOSS_COEF      KL penalty coefficient — main variable in ablation runs (default: 0.01)
+#   EXPERIMENT_NAME   wandb run name, useful for distinguishing ablation groups
 #
-# 常用环境变量覆盖：
-#   MODEL_PATH        Actor/Critic 初始化模型路径（一般为 SFT 冷启动 checkpoint）
-#   KL_LOSS_COEF      KL 惩罚系数，消融实验的核心变量 (默认: 0.01，见下方"崩溃修复"说明)
-#   EXPERIMENT_NAME   wandb 实验名，便于区分消融实验组
-#
-# 示例：KL系数消融实验（3组），分别在不同 GPU 组上并行跑：
+# Example — KL ablation (3 groups in parallel on disjoint GPUs):
 #   CUDA_VISIBLE_DEVICES=0,1,2   KL_LOSS_COEF=0.0005 EXPERIMENT_NAME=ppo_kl0.0005 bash run_ppo.sh 3
 #   CUDA_VISIBLE_DEVICES=3,4,5   KL_LOSS_COEF=0.001  EXPERIMENT_NAME=ppo_kl0.001  bash run_ppo.sh 3
 #   CUDA_VISIBLE_DEVICES=6,7     KL_LOSS_COEF=0.005  EXPERIMENT_NAME=ppo_kl0.005  bash run_ppo.sh 2
 #
 # ============================================================================
-# 崩溃修复说明 v2（2026-08-07，对应 docs/实验结果.md 实验④ PPO 的训练崩溃分析）：
+# Collapse fix history (see docs/ppo_analysis.md for full postmortem)
 #
-# 【第一轮修复（已失败）】KL_LOSS_COEF=0.001, CRITIC_WARMUP=0, temperature=1.0
-# 在 step5~20 附近发生 response_length 爆炸，reward 塌陷到 -1，116步内未恢复。
+# v1 (collapsed): KL_LOSS_COEF=0.001, CRITIC_WARMUP=0, temperature=1.0
+#   response_length exploded to the 1024-token cap around step 5-20;
+#   reward collapsed to -1 and never recovered within 116 steps.
 #
-# 【第二轮修复（已失败）】CRITIC_WARMUP=5, KL_LOSS_COEF=0.005, CRITIC_LR=5e-6,
-# temperature=0.8。前11步确实明显更稳定（vf_explained_var 从 -2.674 改善到接近
-# 0，response_length 稳定在 90-125），但 warmup 结束恢复正常 actor+critic 交替
-# 更新后，同样的长度爆炸在 step12 又发生了（只是从 step5 推迟到了 step12），
-# 说明仅靠短 warmup 不足以根治，critic 仍然不够稳健。
+# v2 (collapsed): CRITIC_WARMUP=5, KL_LOSS_COEF=0.005, CRITIC_LR=5e-6,
+#   temperature=0.8.  Metrics looked stable for the first 11 steps
+#   (vf_explained_var improved from -2.674 toward 0, response_length
+#   held at 90-125), but the same length explosion re-occurred at step 12
+#   once warmup ended and normal actor+critic updates resumed — warmup
+#   alone was not enough to stabilise the critic.
 #
-# 【根因进一步确认】critic 从随机 value head 冷启动，早期 GAE advantage 估计
-# 不准，又没有 GRPO 那种组内相对基线兜底，一旦某次更新给"变长输出"了错误的
-# 正向 advantage，策略梯度会持续强化这个方向（输出越长→critic越难估值→advantage
-# 越不准→进一步强化变长，正反馈循环），直至打满 max_response_length。
+# Root cause: critic cold-starts from a random value head, so early GAE
+#   advantages are mostly noise.  If one noisy update assigns positive
+#   advantage to "produce longer output", policy gradient reinforces that
+#   direction (longer -> harder to value -> noisier advantage -> further
+#   reinforcement — a positive feedback loop until max_response_length).
+#   GRPO's group-relative baseline sidesteps this by not needing a learned
+#   value function at all.
 #
-# 【第三轮修复（当前默认值，多道防线同时生效）】：
-#   1. CRITIC_WARMUP=20         相比第二轮的4倍，覆盖之前实际崩溃发生的 step12，
-#                               给 critic 足够时间把 vf_explained_var 拉到真正稳定
-#   2. PPO_TRUNCATED_EXTRA_PENALTY=2.0（通过 hydra 的
-#                               custom_reward_function.reward_kwargs 传给
-#                               reward/rule_reward.py::compute_score）
-#                               新增机制：对"提取不到answer且长度接近上限"的
-#                               疑似截断样本，在 no_answer_score=-1.0 基础上叠加
-#                               最高 -2.0 的额外惩罚（总计最低 -3.0），让"截断"比
-#                               "普通答错"惩罚更陡岭，给 critic/actor 更早、更明确
-#                               的负反馈，从 reward 层面直接抑制长度失控的正反馈循环
-#                               （需搭配 verl/workers/reward_manager/naive.py 的
-#                               response_length_ratio 传递支持，已完成）
-#   3. CRITIC_CLIPRANGE_VALUE=0.2  相比默认 0.5 收紧，限制 critic 单步价值预测
-#                               跳动幅度，减少价值函数震荡
-#   4. KL_LOSS_COEF=0.01        相比第二轮的 0.005 再提高一倍，更强约束 actor
-#                               偏离 SFT 初始分布的速度，给 critic 争取更多追赶时间
-#   5. CRITIC_LR=5e-6           保持第二轮的降低值，避免 critic 更新过猛
-#   6. ROLLOUT_TEMPERATURE=0.7  相比第二轮的 0.8 进一步降低，减小 rollout 方差
-#   7. TEST_FREQ=2              保持加密验证，便于尽早发现异常
+# v3 (current defaults — multiple guards active simultaneously):
+#   1. CRITIC_WARMUP=20          4x v2; covers the actual collapse point
+#                                (step 12) and gives the critic enough time
+#                                to bring vf_explained_var to a stable level
+#   2. PPO_TRUNCATED_EXTRA_PENALTY=2.0  passed via
+#                                custom_reward_function.reward_kwargs to
+#                                reward/rule_reward.py::compute_score;
+#                                applies up to -2.0 extra penalty on top of
+#                                the base no_answer_score=-1.0 (total -3.0)
+#                                for rollouts that look truncated (no answer
+#                                extracted, length near the cap), giving
+#                                critic/actor an earlier and sharper negative
+#                                signal against length runaway
+#                                (requires response_length_ratio forwarding
+#                                in verl/workers/reward_manager/naive.py,
+#                                already patched)
+#   3. CRITIC_CLIPRANGE_VALUE=0.2  tighter than the default 0.5; limits
+#                                per-step value prediction jumps and reduces
+#                                value-function oscillation
+#   4. KL_LOSS_COEF=0.01         double v2's 0.005; stronger constraint on
+#                                how fast actor drifts from the SFT init,
+#                                buying the critic more time to catch up
+#   5. CRITIC_LR=5e-6            same as v2; prevents the critic from
+#                                over-updating
+#   6. ROLLOUT_TEMPERATURE=0.7   lower than v2's 0.8; reduces rollout
+#                                variance
+#   7. TEST_FREQ=2               frequent validation to catch anomalies early
 #
-# 如果上述默认值仍然复现崩溃，说明问题可能不仅仅是 critic 冷启动，建议考虑：
-#   - 降低 PPO_MINI_BATCH_SIZE（增加 actor 更新频率但每次幅度更小）
-#   - 尝试 algorithm.adv_estimator=grpo 或 rloo 作为 PPO 的替代方案
-#   - 直接降低 max_response_length（如512）降低长度爆炸的上限与代价
+# If the defaults above still produce a collapse, consider:
+#   - Reducing PPO_MINI_BATCH_SIZE (smaller but more frequent actor updates)
+#   - Switching to algorithm.adv_estimator=grpo or rloo
+#   - Lowering max_response_length (e.g. 512) to cap the damage
 # ============================================================================
 
 set -xeuo pipefail
@@ -89,27 +99,30 @@ ACTOR_LR=${ACTOR_LR:-1e-6}
 CRITIC_LR=${CRITIC_LR:-5e-6}
 KL_LOSS_COEF=${KL_LOSS_COEF:-0.01}
 ENTROPY_COEFF=${ENTROPY_COEFF:-0}
-# GAE 参数（消融点：advantage estimation）
+# GAE parameters (ablation point: advantage estimation)
 GAMMA=${GAMMA:-1.0}
 LAM=${LAM:-0.95}
-# critic warmup：训练开始的前 N 步只更新 critic、不更新 actor，让价值函数先
-# 追上真实 reward 分布，避免早期不准的 advantage 误导 actor（见上方崩溃修复说明）。
-# 第二轮用 5 步仅能支撑到 step12，因此提高到 20 以覆盖实际崩溃点。
+# Critic warmup: update only the critic for the first N steps before
+# allowing actor updates, giving the value function time to converge
+# before its advantages are used to update the policy (see collapse fix
+# notes above). v2 used 5 steps (failed at step 12); 20 covers that.
 CRITIC_WARMUP=${CRITIC_WARMUP:-20}
-# critic 价值函数裁剪范围：相比默认 0.5 收紧，限制单步价值预测跳动幅度
+# Critic value-clip range: tighter than the default 0.5 to reduce
+# per-step value prediction oscillation
 CRITIC_CLIPRANGE_VALUE=${CRITIC_CLIPRANGE_VALUE:-0.2}
-# rollout 采样温度：默认 1.0 方差较大，容易在 critic 尚不稳定时采出极端样本
+# Rollout sampling temperature: lower than the default 1.0 to reduce
+# rollout variance while the critic is still warming up
 ROLLOUT_TEMPERATURE=${ROLLOUT_TEMPERATURE:-0.7}
-# 截断样本额外惩罚（通过 hydra 的 custom_reward_function.reward_kwargs 传给
-# reward/rule_reward.py::compute_score，比环境变量更可靠，不依赖 Ray 分布式
-# 进程的环境继承行为）：默认 0 不启用，设为>0 后对"提取不到answer且长度
-# 接近上限"的样本叠加额外惩罚
+# Extra penalty for suspected truncated rollouts (no answer + near length
+# cap). Passed via custom_reward_function.reward_kwargs — more reliable
+# than env vars in a distributed Ray setup. Set to 0 to disable.
 PPO_TRUNCATED_EXTRA_PENALTY=${PPO_TRUNCATED_EXTRA_PENALTY:-2.0}
 PPO_LENGTH_PENALTY_START_RATIO=${PPO_LENGTH_PENALTY_START_RATIO:-0.9}
 
 ROLLOUT_TP=${ROLLOUT_TP:-1}
-# 注意：hybrid_engine 模式下 FSDP(actor/critic/ref) 和 vLLM(rollout) colocate 在同一张卡上，
-# PPO 还要额外常驻一个 Critic 模型，显存更紧张，保守设置为 0.3。
+# In hybrid_engine mode, FSDP (actor/critic/ref) and vLLM (rollout)
+# share the same GPU; PPO also keeps a resident critic, so memory is
+# tighter than GRPO — conservative at 0.3.
 ROLLOUT_GPU_MEM_UTIL=${ROLLOUT_GPU_MEM_UTIL:-0.3}
 ROLLOUT_N=${ROLLOUT_N:-1}
 
@@ -118,7 +131,8 @@ EXPERIMENT_NAME=${EXPERIMENT_NAME:-ppo_gsm8k_qwen3_0.6b_kl${KL_LOSS_COEF}}
 SAVE_FREQ=${SAVE_FREQ:-20}
 TEST_FREQ=${TEST_FREQ:-2}
 TOTAL_EPOCHS=${TOTAL_EPOCHS:-15}
-# wandb 需要走代理才能连通外网；仅对 wandb 客户端生效，不污染全局 http(s)_proxy
+# wandb needs a proxy to reach the internet; scoped here so it does not
+# pollute the global http(s)_proxy
 WANDB_PROXY=${WANDB_PROXY:-http://10.176.253.182:8080}
 
 CUSTOM_REWARD_PATH=${CUSTOM_REWARD_PATH:-${REPO_ROOT}/reward/rule_reward.py}

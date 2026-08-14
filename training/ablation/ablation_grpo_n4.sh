@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# P1 消融实验：GRPO group size (rollout.n) = 4
-# 对照组：n=8 已有主实验结果 docs/实验结果.md 实验③，n=16 见 _ablation_grpo_n16.sh
+# Ablation: GRPO group size (rollout.n) = 4
+# Baseline: n=8 main run in docs/experiments.md; n=16 in ablation_grpo_n16.sh
 set -o pipefail
-# 本脚本位于 training/ablation/，仓库根目录在其上两级
+# This script lives in training/ablation/; the repo root is two levels up
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 

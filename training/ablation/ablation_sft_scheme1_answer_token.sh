@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# 消融实验【方案1】：给 tokenizer 新增 <answer>/</answer> special token 后的 SFT 重训练
-# 前置条件：需先用 scripts/add_answer_special_tokens.py 生成 MODEL_PATH 指向的 base_with_answer_token 模型
+# Ablation [scheme 1]: SFT re-train after adding <answer>/</answer> as special tokens
+# to the tokenizer.
+# Pre-requisite: run scripts/add_answer_special_tokens.py first to produce the
+# base_with_answer_token model pointed to by MODEL_PATH.
 set -euo pipefail
 
-# 本脚本位于 training/ablation/，仓库根目录在其上两级
+# This script lives in training/ablation/; the repo root is two levels up
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 CONDA_ENV_BIN=${CONDA_ENV_BIN:-/home/sankuai/conda/envs/rl/bin}

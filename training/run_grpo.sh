@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
 # GRPO | Qwen3-0.6B/1.7B | FSDP + vLLM rollout | 8x A100 80G
 #
-# 对应 docs/方案计划.md Week3-4：GRPO 跑通（优先于PPO），group size 消融实验
+# Usage:
+#   bash run_grpo.sh <nproc_per_node> [extra hydra overrides...]
 #
-# 用法：
-#   bash run_grpo.sh <nproc_per_node> [其他 hydra 覆盖参数...]
+# Key env-var overrides:
+#   MODEL_PATH          base/SFT checkpoint path (default: Qwen3-0.6B-Base SFT cold-start ckpt)
+#   ROLLOUT_N           GRPO group size (samples per prompt); main ablation variable (default: 8)
+#   KL_LOSS_COEF        KL penalty coefficient (default: 0.001)
+#   EXPERIMENT_NAME     wandb run name, useful for distinguishing ablation groups
 #
-# 常用环境变量覆盖：
-#   MODEL_PATH          基座/SFT后模型路径 (默认: Qwen3-0.6B-Base SFT 冷启动 checkpoint)
-#   ROLLOUT_N           GRPO group size（组内采样数），消融实验时改这个 (默认: 8)
-#   KL_LOSS_COEF        KL 惩罚系数 (默认: 0.001)
-#   EXPERIMENT_NAME      wandb 实验名，便于区分消融实验组
-#
-# 示例：group size 消融实验（4/8/16），分别在不同 GPU 组上并行跑：
+# Example — group-size ablation (4/8/16) in parallel on disjoint GPUs:
 #   CUDA_VISIBLE_DEVICES=0,1,2,3 ROLLOUT_N=4  EXPERIMENT_NAME=grpo_gsize4  bash run_grpo.sh 4
 #   CUDA_VISIBLE_DEVICES=4,5     ROLLOUT_N=8  EXPERIMENT_NAME=grpo_gsize8  bash run_grpo.sh 2
 #   CUDA_VISIBLE_DEVICES=6,7     ROLLOUT_N=16 EXPERIMENT_NAME=grpo_gsize16 bash run_grpo.sh 2
@@ -46,19 +44,22 @@ KL_LOSS_COEF=${KL_LOSS_COEF:-0.001}
 ENTROPY_COEFF=${ENTROPY_COEFF:-0}
 
 ROLLOUT_TP=${ROLLOUT_TP:-1}
-# 注意：hybrid_engine 模式下 FSDP(actor/ref) 和 vLLM(rollout) colocate 在同一张卡上，
-# gpu_memory_utilization 是 vLLM 初始化时基于"当前可见空闲显存"的比例，设太高容易在
-# 4卡等并行度变化时报 "No available memory for the cache blocks"，保守设置为 0.35。
+# In hybrid_engine mode, FSDP (actor/ref) and vLLM (rollout) share the same
+# GPU. gpu_memory_utilization is the fraction of *currently free* VRAM that
+# vLLM claims at init time — setting it too high causes "No available memory
+# for the cache blocks" errors when the number of parallel workers changes
+# (e.g. 4-GPU runs). Conservative default: 0.35.
 ROLLOUT_GPU_MEM_UTIL=${ROLLOUT_GPU_MEM_UTIL:-0.35}
-ROLLOUT_N=${ROLLOUT_N:-8}  # GRPO group size，消融实验的核心变量
+ROLLOUT_N=${ROLLOUT_N:-8}  # GRPO group size — main ablation variable
 
 PROJECT_NAME=${PROJECT_NAME:-llm-rl-reasoning}
 EXPERIMENT_NAME=${EXPERIMENT_NAME:-grpo_gsm8k_qwen3_0.6b_n${ROLLOUT_N}}
 SAVE_FREQ=${SAVE_FREQ:-20}
 TEST_FREQ=${TEST_FREQ:-5}
 TOTAL_EPOCHS=${TOTAL_EPOCHS:-15}
-# wandb 需要走代理才能连通外网；仅对 wandb 客户端生效，不污染全局 http(s)_proxy
-# （避免影响 rollout 阶段 vLLM/ChatCompletionScheduler 等其他 HTTP 请求）
+# wandb needs a proxy to reach the internet; scoped here so it does not
+# pollute the global http(s)_proxy (which would affect vLLM and other
+# HTTP clients during the rollout phase)
 WANDB_PROXY=${WANDB_PROXY:-http://10.176.253.182:8080}
 
 CUSTOM_REWARD_PATH=${CUSTOM_REWARD_PATH:-${REPO_ROOT}/reward/rule_reward.py}

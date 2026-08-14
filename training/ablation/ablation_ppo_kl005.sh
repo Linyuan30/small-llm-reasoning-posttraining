@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# P1 消融实验：PPO KL_LOSS_COEF = 0.005（其余超参与已修复的 v3 主实验保持一致）
-# 对照组：KL=0.01 已有主实验结果 docs/实验结果.md 实验④ v3，KL=0.02 见 _ablation_ppo_kl02.sh
+# Ablation: PPO KL_LOSS_COEF = 0.005 (all other hyperparameters match the v3 main run)
+# Baseline: KL=0.01 main run in docs/experiments.md; KL=0.02 in ablation_ppo_kl02.sh
 set -o pipefail
-# 本脚本位于 training/ablation/，仓库根目录在其上两级
+# This script lives in training/ablation/; the repo root is two levels up
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 

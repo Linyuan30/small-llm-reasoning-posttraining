@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# SFT 冷启动 | Qwen3-0.6B/1.7B-Base | FSDP engine
+# SFT cold-start | Qwen3-0.6B/1.7B-Base | FSDP engine
 #
-# 对应 docs/方案计划.md Week2：SFT冷启动训练
+# Usage:
+#   bash run_sft.sh <nproc_per_node> <save_path> [extra hydra overrides...]
 #
-# 用法：
-#   bash run_sft.sh <nproc_per_node> <save_path> [其他 hydra 覆盖参数...]
-#
-# 示例（0.6B 和 1.7B 并行跑规模对比，分别用不同 GPU）：
+# Example — scale comparison (0.6B vs 1.7B) in parallel on disjoint GPUs:
 #   CUDA_VISIBLE_DEVICES=0,1,2,3 MODEL_PATH=/path/to/model/Qwen3-0.6B-Base \
 #     bash run_sft.sh 4 ../models/sft_coldstart/qwen3-0.6b
 #   CUDA_VISIBLE_DEVICES=4,5,6,7 MODEL_PATH=/path/to/model/Qwen3-1.7B-Base \
@@ -36,10 +34,10 @@ TOTAL_EPOCHS=${TOTAL_EPOCHS:-15}
 SP_SIZE=${SP_SIZE:-1}
 PROJECT_NAME=${PROJECT_NAME:-llm-rl-reasoning}
 EXPERIMENT_NAME=${EXPERIMENT_NAME:-sft_coldstart_$(basename "${MODEL_PATH}")}
-# LOGGER 可设为 '["console"]' 或 '["console","wandb"]'
+# LOGGER can be '["console"]' or '["console","wandb"]'
 LOGGER=${LOGGER:-'["console","wandb"]'}
-# wandb 需要走代理才能连通外网；仅对 wandb 客户端生效（trainer.wandb_proxy），
-# 不会污染全局 http_proxy/https_proxy 环境变量。
+# wandb needs a proxy to reach the internet; scoped to the trainer so it
+# does not pollute the global http_proxy/https_proxy env vars.
 WANDB_PROXY=${WANDB_PROXY:-http://10.176.253.182:8080}
 ########################### end user-adjustable ###########################
 

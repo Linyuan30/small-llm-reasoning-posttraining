@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# 消融实验【方案2】：plain answer格式（去掉 <answer> XML 标签，直接用纯文本答案）的 SFT 重训练
-# 前置条件：需先用 data/scripts/prepare_*_v2_plain_answer.py 生成 TRAIN_FILE/VAL_FILE 对应的数据
+# Ablation [scheme 2]: SFT re-train with plain-answer format (no <answer> XML tags;
+# model outputs the final answer as plain text).
+# Pre-requisite: run data/scripts/prepare_*_v2_plain_answer.py first to generate
+# the TRAIN_FILE/VAL_FILE datasets.
 set -euo pipefail
 
-# 本脚本位于 training/ablation/，仓库根目录在其上两级
+# This script lives in training/ablation/; the repo root is two levels up
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 CONDA_ENV_BIN=${CONDA_ENV_BIN:-/home/sankuai/conda/envs/rl/bin}

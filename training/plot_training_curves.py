@@ -1,29 +1,29 @@
 # Copyright (c) 2026
 #
-# 从 veRL 训练日志（logs/pipeline/*.log、logs/ablation/*.log）中解析逐 step 指标，
-# 绘制训练过程曲线图，补齐 docs/03_results.md 里"只有关键 step 快照表格、没有完整曲线"的短板。
+# Parse per-step metrics from veRL training logs (logs/pipeline/*.log,
+# logs/ablation/*.log) and plot training-dynamics figures.
 #
-# veRL 训练日志每个 step 打印一行形如：
+# veRL prints one line per step in the form:
 #   (TaskRunner pid=xxx) step:5 - response_length/mean:114.098 - critic/vf_explained_var:-0.771 - ...
-# 本脚本用正则把每行的 `key:value` 对提取出来，按 step 聚合成时间序列后画图。
+# This script extracts every key:value pair with a regex, aggregates them
+# into time series indexed by step, and draws the plots.
 #
-# 设计原则：
-#   - 只读取已有 log 文件，不重新训练，秒级出图
-#   - 某个日志文件缺失/无匹配行时自动跳过对应曲线，不中断整体流程
-#   - 图表文字统一使用英文，避免无中文字体环境下的乱码
+# Design principles:
+#   - Reads existing log files only; no re-training required; output is instant.
+#   - Missing or empty log files are silently skipped; other plots still run.
+#   - All chart text is in English to avoid font issues in headless environments.
 #
-# 用法：
-#   python plot_training_curves.py                  # 生成全部图表到 ../docs/images/
+# Usage:
+#   python plot_training_curves.py                  # write all figures to ../docs/images/
 #   python plot_training_curves.py --output_dir xxx
 #
-# 产出图表清单：
-#   1. grpo_vs_ppo_training_curves.png   GRPO(主实验) vs PPO(v3修复) 训练过程对比：
-#                                        val reward@1 / response_length/mean 双面板
-#   2. ppo_collapse_vs_fixed.png         PPO v1(崩溃) vs v3(修复) 对比：
-#                                        response_length/mean / val reward@1 双面板，
-#                                        这是全项目最有故事性的一张图（崩溃到自愈）
-#   3. grpo_group_size_training_curves.png  GRPO group size (n=4/8/16) 训练曲线对比
-#   4. dpo_training_curve.png            DPO loss / rewards accuracy 训练曲线（数据点较少）
+# Output figures:
+#   1. grpo_vs_ppo_training_curves.png     GRPO (main) vs PPO (v3 fixed):
+#                                          val reward@1 / response_length/mean dual-panel
+#   2. ppo_collapse_vs_fixed.png           PPO v1 (crashed) vs v3 (fixed):
+#                                          response_length/mean / val reward@1 dual-panel
+#   3. grpo_group_size_training_curves.png GRPO group size ablation (n=4/8/16)
+#   4. dpo_training_curve.png              DPO loss / rewards accuracy (few data points)
 
 from __future__ import annotations
 
@@ -52,21 +52,23 @@ plt.rcParams.update(
     }
 )
 
-# 匹配日志行里所有 "key:value" 形式的 metric（key 允许字母/数字/下划线/斜杠/@/连字符，
-# 注意 "val-core/..." 这个 key 本身带连字符，必须包含 "-"，否则会被错误截断成
-# "core/..." 丢失 "val-" 前缀；value 允许负号、小数点的数字）。
+# Match all "key:value" metric pairs in a log line. Key allows letters,
+# digits, underscores, slashes, @, and hyphens ("val-core/..." keys carry a
+# hyphen and must be captured in full; omitting "-" would silently drop the
+# "val-" prefix). Value allows a leading minus sign and a decimal point.
 METRIC_PATTERN = re.compile(r"([\w/@-]+):(-?[0-9]+\.?[0-9]*)")
 STEP_PATTERN = re.compile(r"\bstep:(\d+)\b")
 
 
 def parse_step_log(path: str) -> Optional[Dict[str, List[float]]]:
-    """解析 veRL 训练日志，返回 {metric_name: [values in step order]}，附带 'step' 键。
+    """Parse a veRL training log; return {metric_name: [values in step order]},
+    including a synthetic 'step' key.
 
-    只保留同时包含 `step:` 前缀的行（每个训练/验证 step 打印一次），
-    用 dict 去重同一 step 内的重复 key（正常情况下每个 step 只打印一次）。
+    Only lines that contain a `step:` token are kept (one per training/val step);
+    duplicate keys within the same step row are de-duplicated with dict.
     """
     if not os.path.exists(path):
-        print(f"[SKIP] 找不到日志文件：{path}")
+        print(f"[SKIP] log file not found: {path}")
         return None
 
     series: Dict[str, List[float]] = {}
@@ -84,28 +86,32 @@ def parse_step_log(path: str) -> Optional[Dict[str, List[float]]]:
             steps.append(step)
             for k, v in metrics.items():
                 series.setdefault(k, []).append(float(v))
-            # step 本身也被 METRIC_PATTERN 匹配进 metrics['step']，统一以 steps 列表为准
+            # 'step' itself is also matched by METRIC_PATTERN into metrics['step'];
+            # use the steps list as the authoritative source.
             series.setdefault("step", []).append(step)
 
     if not steps:
-        print(f"[SKIP] {path} 未解析到任何 step 指标行")
+        print(f"[SKIP] {path}: no step-metric lines found")
         return None
     return series
 
 
 def _get_series(series: Dict[str, List[float]], key: str):
-    """按 step 顺序返回 (steps, values)，过滤掉该 key 未出现的 step（如 val 指标只在部分 step 打印）。"""
+    """Return (steps, values) in step order, filtering steps where key is absent
+    (e.g. val metrics are only logged on a subset of steps)."""
     if key not in series:
         return [], []
-    # val-core 系列指标不是每个 step 都有，行数会少于 steps 总数，
-    # 这里简单按其自身出现顺序配对 step（假设日志中 val 指标与其所在行的 step 一一对应）。
+    # val-core metrics are not present on every step; their row count is less
+    # than len(steps). Match them positionally against their own appearance
+    # order (assumes each val-metric occurrence is paired with its step row).
     return None, series[key]
 
 
 def parse_step_log_with_alignment(path: str) -> Optional[Dict[str, List[tuple]]]:
-    """解析训练日志，返回 {metric_name: [(step, value), ...]}，每个指标各自对齐自己出现的 step。"""
+    """Parse a training log; return {metric_name: [(step, value), ...]},
+    each metric aligned to its own step occurrences."""
     if not os.path.exists(path):
-        print(f"[SKIP] 找不到日志文件：{path}")
+        print(f"[SKIP] log file not found: {path}")
         return None
 
     series: Dict[str, List[tuple]] = {}
@@ -122,7 +128,7 @@ def parse_step_log_with_alignment(path: str) -> Optional[Dict[str, List[tuple]]]
                 series.setdefault(k, []).append((step, float(v)))
 
     if not series:
-        print(f"[SKIP] {path} 未解析到任何 step 指标")
+        print(f"[SKIP] {path}: no step metrics found")
         return None
     return series
 
@@ -135,7 +141,7 @@ def _unzip(pairs):
 
 
 # --------------------------------------------------------------------------
-# 图1：GRPO vs PPO 训练过程对比
+# Figure 1: GRPO vs PPO training dynamics
 # --------------------------------------------------------------------------
 
 
@@ -146,7 +152,7 @@ def plot_grpo_vs_ppo(output_dir: str):
     grpo_series = parse_step_log_with_alignment(grpo_log)
     ppo_series = parse_step_log_with_alignment(ppo_log)
     if grpo_series is None and ppo_series is None:
-        print("[SKIP] plot_grpo_vs_ppo: 无可用数据")
+        print("[SKIP] plot_grpo_vs_ppo: no data available")
         return
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
@@ -181,11 +187,11 @@ def plot_grpo_vs_ppo(output_dir: str):
     out_path = os.path.join(output_dir, "grpo_vs_ppo_training_curves.png")
     fig.savefig(out_path)
     plt.close(fig)
-    print(f"[OK] 已生成 {out_path}")
+    print(f"[OK] saved {out_path}")
 
 
 # --------------------------------------------------------------------------
-# 图2：PPO 崩溃(v1) vs 修复(v3) 对比 —— 全项目最有故事性的图
+# Figure 2: PPO collapse (v1) vs fixed (v3)
 # --------------------------------------------------------------------------
 
 
@@ -196,7 +202,7 @@ def plot_ppo_collapse_vs_fixed(output_dir: str):
     v1_series = parse_step_log_with_alignment(v1_log)
     v3_series = parse_step_log_with_alignment(v3_log)
     if v1_series is None and v3_series is None:
-        print("[SKIP] plot_ppo_collapse_vs_fixed: 无可用数据")
+        print("[SKIP] plot_ppo_collapse_vs_fixed: no data available")
         return
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
@@ -233,11 +239,11 @@ def plot_ppo_collapse_vs_fixed(output_dir: str):
     out_path = os.path.join(output_dir, "ppo_collapse_vs_fixed.png")
     fig.savefig(out_path)
     plt.close(fig)
-    print(f"[OK] 已生成 {out_path}")
+    print(f"[OK] saved {out_path}")
 
 
 # --------------------------------------------------------------------------
-# 图3：GRPO group size 消融训练曲线
+# Figure 3: GRPO group-size ablation training curves
 # --------------------------------------------------------------------------
 
 
@@ -263,7 +269,7 @@ def plot_grpo_group_size_curves(output_dir: str):
             axes[1].plot(xs, ys, label=label, color=color, linewidth=1.5)
 
     if not plotted:
-        print("[SKIP] plot_grpo_group_size_curves: 无可用数据")
+        print("[SKIP] plot_grpo_group_size_curves: no data available")
         plt.close(fig)
         return
 
@@ -283,11 +289,11 @@ def plot_grpo_group_size_curves(output_dir: str):
     out_path = os.path.join(output_dir, "grpo_group_size_training_curves.png")
     fig.savefig(out_path)
     plt.close(fig)
-    print(f"[OK] 已生成 {out_path}")
+    print(f"[OK] saved {out_path}")
 
 
 # --------------------------------------------------------------------------
-# 图4：DPO 训练曲线
+# Figure 4: DPO training curve
 # --------------------------------------------------------------------------
 
 DPO_METRIC_PATTERN = re.compile(r"'(loss|rewards/accuracies|rewards/margins|epoch)':\s*(-?[0-9]+\.?[0-9]*)")
@@ -295,7 +301,7 @@ DPO_METRIC_PATTERN = re.compile(r"'(loss|rewards/accuracies|rewards/margins|epoc
 
 def parse_dpo_log(path: str) -> Optional[Dict[str, List[float]]]:
     if not os.path.exists(path):
-        print(f"[SKIP] 找不到日志文件：{path}")
+        print(f"[SKIP] log file not found: {path}")
         return None
     series: Dict[str, List[float]] = {}
     cur_epoch = None
@@ -317,7 +323,7 @@ def plot_dpo_training_curve(output_dir: str):
     dpo_log = os.path.join(LOGS_DIR, "pipeline", "stage7_train_dpo_retry2.log")
     series = parse_dpo_log(dpo_log)
     if series is None:
-        print("[SKIP] plot_dpo_training_curve: 无可用数据")
+        print("[SKIP] plot_dpo_training_curve: no data available")
         return
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
@@ -346,7 +352,7 @@ def plot_dpo_training_curve(output_dir: str):
     out_path = os.path.join(output_dir, "dpo_training_curve.png")
     fig.savefig(out_path)
     plt.close(fig)
-    print(f"[OK] 已生成 {out_path}")
+    print(f"[OK] saved {out_path}")
 
 
 def main():
@@ -361,7 +367,7 @@ def main():
     plot_grpo_group_size_curves(args.output_dir)
     plot_dpo_training_curve(args.output_dir)
 
-    print(f"\n全部图表已生成到 {args.output_dir}")
+    print(f"\nAll figures written to {args.output_dir}")
 
 
 if __name__ == "__main__":
