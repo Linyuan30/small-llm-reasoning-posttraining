@@ -1,15 +1,14 @@
 # Copyright (c) 2026
 #
-# 用 SFT 冷启动模型做 rejection sampling，构造 DPO 偏好对数据。
-# 对应 docs/流程.md 5.5 节 / docs/方案计划.md Week2：DPO偏好对构造。
+# Rejection-sampling from the SFT cold-start model to build DPO preference pairs.
 #
-# 流程：
-#   1. 用 vLLM 加载 SFT 模型，对每条训练 prompt 采样 N 次（temperature>0）
-#   2. 用规则 reward（reward/rule_reward.py）给每个采样结果打分
-#   3. 按分数排序，取分数最高的作为 chosen，分数最低的作为 rejected
-#      （若最高分==最低分，即所有采样结果得分相同，跳过该条，因为没有偏好信号）
+# Pipeline:
+#   1. Load the SFT model with vLLM; sample N responses per training prompt.
+#   2. Score each response with the rule reward (reward/rule_reward.py).
+#   3. Take the highest-scoring response as "chosen" and the lowest as "rejected".
+#      If best_score == worst_score (all samples tied), skip the prompt — no signal.
 #
-# 用法：
+# Usage:
 #   python build_dpo_pairs.py \
 #       --model_path ../../models/sft_coldstart/qwen3-0.6b \
 #       --input_parquet ../processed/gsm8k/train.parquet \
@@ -34,10 +33,10 @@ from rule_reward import RuleReward  # noqa: E402
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", required=True)
-    parser.add_argument("--input_parquet", required=True, help="prepare_gsm8k.py / prepare_math.py 产出的 RL 训练 parquet")
+    parser.add_argument("--input_parquet", required=True, help="RL training parquet produced by prepare_gsm8k.py / prepare_math.py")
     parser.add_argument("--output_path", required=True)
-    parser.add_argument("--num_samples", type=int, default=8, help="每个 prompt 的采样次数")
-    parser.add_argument("--max_prompts", type=int, default=4000, help="最多处理多少条 prompt（控制耗时）")
+    parser.add_argument("--num_samples", type=int, default=8, help="number of samples per prompt")
+    parser.add_argument("--max_prompts", type=int, default=4000, help="max number of prompts to process")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top_p", type=float, default=0.95)
     parser.add_argument("--max_new_tokens", type=int, default=1024)
@@ -50,7 +49,7 @@ def parse_args():
 def main():
     args = parse_args()
 
-    from vllm import LLM, SamplingParams  # 延迟导入，避免脚本仅做单测/预览时也强依赖 vllm
+    from vllm import LLM, SamplingParams  # lazy import to avoid hard vllm dep when not needed
 
     df = pd.read_parquet(args.input_parquet)
     if args.max_prompts is not None:

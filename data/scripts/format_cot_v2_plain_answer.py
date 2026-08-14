@@ -1,28 +1,20 @@
 # Copyright (c) 2026
 #
-# 【消融实验变体 v2】不用 <answer>...</answer> XML 标签的输出格式。
+# Ablation variant (v2): output format without <answer>...</answer> XML tags.
+# Uses <think>...</think> followed by the answer as plain text.
 #
-# 背景（详见 docs/问题记录.md）：
-#   Qwen3 tokenizer 里 <think>/</think> 是原生 special token（各编码为1个
-#   token），但 <answer>/</answer> 会被 BPE 拆成 3 个普通子词
-#   （如 '<' 'answer' '>'），学习难度明显更高。除了"给 answer 也加 special
-#   token"（见 add_answer_special_tokens.py）之外，另一种思路是干脆不用
-#   <answer> 标签，直接沿用 Qwen3 原生的 <think>...</think> 机制 + 纯文本
-#   最终答案，格式更贴近 Qwen3 预训练时见过的分布。
+# Rationale: Qwen3 tokenizer treats <think>/</think> as native special tokens
+# (one token each), but <answer>/</answer> are split by BPE into ~3 sub-words
+# ('<', 'answer', '>'), making the answer boundary harder to learn. This variant
+# skips the <answer> tag entirely, staying closer to Qwen3's pre-training format.
 #
-# 本文件与主线 format_cot.py 完全独立，不修改、不影响主线的
-# <think>...</think><answer>...</answer> 格式实验结果（该格式是
-# docs/流程.md 4.1节明确的项目主设计，已跑通 SFT/GRPO/PPO/DPO 全流程）。
-# 本文件仅用于对比消融实验："XML answer 标签 + special token" vs
-# "无 answer 标签的原生格式"，哪个格式合规率/pass@k 更好。
-#
-# 输出格式：
+# Output format:
 #   <think>
-#   （推理过程）
+#   (reasoning)
 #   </think>
-#   （最终答案，纯文本，无任何包裹标签）
+#   (final answer — plain text, no wrapping tags)
 #
-# 供 prepare_gsm8k_v2_plain_answer.py / prepare_math_v2_plain_answer.py 共用。
+# Used by prepare_gsm8k_v2_plain_answer.py and prepare_math_v2_plain_answer.py.
 
 from __future__ import annotations
 
@@ -43,7 +35,7 @@ INSTRUCTION_SUFFIX = (
 
 
 def build_prompt_messages(question: str, add_system_prompt: bool = True) -> list[dict]:
-    """构造统一的 chat 格式 prompt，用于 RL(GRPO/PPO) 训练与评估阶段。"""
+    """Build a chat-format prompt for RL (GRPO/PPO) training and evaluation."""
     messages = []
     if add_system_prompt:
         messages.append({"role": "system", "content": SYSTEM_PROMPT})
@@ -57,24 +49,19 @@ def build_prompt_messages(question: str, add_system_prompt: bool = True) -> list
 
 
 def format_think_answer(reasoning: str, final_answer: str) -> str:
-    """把 (推理过程, 最终答案) 拼接成 <think>...</think>+纯文本答案 格式字符串。
-
-    用于构造 SFT 冷启动数据的 assistant 回复（v2 变体，无 <answer> 标签）。
-    """
+    """Combine (reasoning, answer) into a <think>...</think> + plain-text assistant reply for SFT."""
     reasoning = reasoning.strip()
     final_answer = str(final_answer).strip()
     return f"<think>\n{reasoning}\n</think>\n{final_answer}"
 
 
-# 以下两个函数与主线 format_cot.py 完全相同（不涉及 answer 标签变化），
-# 直接复用同样的实现，避免重复维护两份一致的逻辑。
+# The two functions below are identical to format_cot.py (they don't involve the
+# answer tag) and are duplicated here to keep this file self-contained.
 _GSM8K_CALC_ANNOTATION = re.compile(r"<<[^>]*>>")
 
 
 def clean_gsm8k_rationale(answer_raw: str) -> tuple[str, str]:
-    """把 GSM8K 原始 answer 字段（含 <<calc>> 标注和 '#### X' 结尾）
-    拆分为 (纯推理过程文本, 最终答案)。
-    """
+    """Split a raw GSM8K answer field into (rationale, final_answer)."""
     text = _GSM8K_CALC_ANNOTATION.sub("", answer_raw)
 
     if "####" in text:
@@ -88,7 +75,7 @@ def clean_gsm8k_rationale(answer_raw: str) -> tuple[str, str]:
 
 
 def extract_boxed_answer(solution: str) -> str | None:
-    """从 MATH 数据集官方 solution 文本中提取 \\boxed{...} 内的最终答案。"""
+    """Extract the content of the last \\boxed{...} in a MATH solution string."""
     idx = solution.rfind("\\boxed")
     if idx < 0:
         idx = solution.rfind("\\fbox")

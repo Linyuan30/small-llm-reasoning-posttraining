@@ -1,17 +1,14 @@
 # Copyright (c) 2026
 #
-# MATH (DigitalLearningGmbH/MATH-lighteval) 数据下载、格式化脚本
+# Download and format MATH (DigitalLearningGmbH/MATH-lighteval) into:
+#   1. data/processed/math/{train,test}.parquet  — RL training data for veRL GRPO/PPO
+#   2. data/processed/math_sft_coldstart.jsonl   — SFT cold-start data (<think>/<answer> format)
 #
-# 产出（对应 docs/方案计划.md Week1 任务）：
-#   1. data/processed/math/{train,test}.parquet
-#      —— 用于 veRL GRPO/PPO 训练的 RL 数据（prompt 已统一为 <think>/<answer> 格式要求）
-#   2. data/processed/math_sft_coldstart.jsonl
-#      —— 用于 SFT 冷启动：把 MATH 官方 solution 改写为 <think>/<answer> 格式
+# Note: the original 'lighteval/MATH' repo has been removed from HuggingFace;
+# the community mirror 'DigitalLearningGmbH/MATH-lighteval' is used instead
+# (consistent with the official veRL examples).
 #
-# 说明：'lighteval/MATH' 原始仓库已在 HuggingFace 下架，使用社区镜像
-#       'DigitalLearningGmbH/MATH-lighteval'（与 veRL 官方示例保持一致）。
-#
-# 用法：
+# Usage:
 #   python prepare_math.py --local_save_dir ../processed/math \
 #       --sft_output ../processed/math_sft_coldstart.jsonl \
 #       --sft_sample_size 2000
@@ -63,7 +60,7 @@ def build_rl_dataset(dataset: datasets.Dataset, split: str) -> datasets.Dataset:
 
 
 def build_sft_records(dataset: datasets.Dataset, sample_size: int, seed: int = 42) -> list[dict]:
-    """从 MATH 训练集抽样构造 SFT 冷启动数据，跳过无法抽取出 \\boxed 答案的样本。"""
+    """Sample from the MATH train split; skip examples where \\boxed answer cannot be extracted."""
     shuffled = dataset.shuffle(seed=seed)
 
     records = []
@@ -100,10 +97,10 @@ def build_sft_records(dataset: datasets.Dataset, sample_size: int, seed: int = 4
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_dataset_path", default=None, help="本地已下载的 MATH 数据集路径（若已有缓存）")
-    parser.add_argument("--local_save_dir", default="../processed/math", help="RL 训练用 parquet 输出目录")
-    parser.add_argument("--sft_output", default="../processed/math_sft_coldstart.jsonl", help="SFT 冷启动数据输出路径")
-    parser.add_argument("--sft_sample_size", type=int, default=2000, help="SFT 冷启动数据抽样条数")
+    parser.add_argument("--local_dataset_path", default=None, help="local HF cache path (skip download if provided)")
+    parser.add_argument("--local_save_dir", default="../processed/math", help="output directory for RL parquet files")
+    parser.add_argument("--sft_output", default="../processed/math_sft_coldstart.jsonl", help="output path for SFT cold-start jsonl")
+    parser.add_argument("--sft_sample_size", type=int, default=2000, help="number of SFT records to sample")
     args = parser.parse_args()
 
     print(f"Loading {DATA_SOURCE} dataset ...", flush=True)
@@ -116,7 +113,6 @@ def main():
     test_dataset = dataset["test"]
     print(f"train size = {len(train_dataset)}, test size = {len(test_dataset)}")
 
-    # 1. RL 训练用数据
     rl_train = build_rl_dataset(train_dataset, "train")
     rl_test = build_rl_dataset(test_dataset, "test")
 
@@ -126,7 +122,6 @@ def main():
     rl_test.to_parquet(os.path.join(save_dir, "test.parquet"))
     print(f"Saved RL parquet to {save_dir}")
 
-    # 2. SFT 冷启动数据
     sft_records = build_sft_records(train_dataset, args.sft_sample_size)
     sft_output_path = os.path.abspath(args.sft_output)
     os.makedirs(os.path.dirname(sft_output_path), exist_ok=True)

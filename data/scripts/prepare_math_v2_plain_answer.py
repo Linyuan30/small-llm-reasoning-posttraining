@@ -1,13 +1,12 @@
 # Copyright (c) 2026
 #
-# 【消融实验变体 v2】MATH 数据格式化脚本：不用 <answer> XML 标签，
-# 改用 <think>...</think> + 纯文本最终答案 的格式（见 format_cot_v2_plain_answer.py）。
-#
-# 与主线 prepare_math.py 完全独立，产出到独立目录/文件，不覆盖主线数据：
+# Ablation variant (v2): MATH formatted with plain-answer output — no <answer> XML tags;
+# uses <think>...</think> followed by the answer as plain text.
+# Output is written to separate files and does not overwrite the main-line data:
 #   1. data/processed/math_v2_plain_answer/{train,test}.parquet
 #   2. data/processed/math_sft_coldstart_v2_plain_answer.jsonl
 #
-# 用法：
+# Usage:
 #   python prepare_math_v2_plain_answer.py \
 #       --local_dataset_path ../processed/math_hf_cache \
 #       --local_save_dir ../processed/math_v2_plain_answer \
@@ -96,12 +95,12 @@ def build_sft_records(dataset: datasets.Dataset, sample_size: int, seed: int = 4
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_dataset_path", default=None, help="本地已下载的 MATH 数据集路径（若已有缓存）")
-    parser.add_argument("--local_save_dir", default="../processed/math_v2_plain_answer", help="RL 训练用 parquet 输出目录")
+    parser.add_argument("--local_dataset_path", default=None, help="local HF cache path (skip download if provided)")
+    parser.add_argument("--local_save_dir", default="../processed/math_v2_plain_answer", help="output directory for RL parquet files")
     parser.add_argument(
-        "--sft_output", default="../processed/math_sft_coldstart_v2_plain_answer.jsonl", help="SFT 冷启动数据输出路径"
+        "--sft_output", default="../processed/math_sft_coldstart_v2_plain_answer.jsonl", help="output path for SFT cold-start jsonl"
     )
-    parser.add_argument("--sft_sample_size", type=int, default=2000, help="SFT 冷启动数据抽样条数")
+    parser.add_argument("--sft_sample_size", type=int, default=2000, help="number of SFT records to sample")
     args = parser.parse_args()
 
     print(f"Loading {DATA_SOURCE} dataset ...", flush=True)

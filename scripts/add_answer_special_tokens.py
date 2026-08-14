@@ -1,20 +1,19 @@
 # Copyright (c) 2026
 #
-# 给 base 模型的 tokenizer 新增 <answer>/</answer> special token，并 resize
-# model 的 embedding / lm_head，另存为一份新的 base 模型权重。
+# Add <answer>/</answer> as special tokens to the base model tokenizer, resize
+# the model embeddings, and save a new copy of the base model weights.
 #
-# 背景（详见 docs/问题记录.md）：
-#   Qwen3 tokenizer 原生把 <think>/</think> 作为单独的 added special token
-#   （分别编码为 1 个 token），但 <answer>/</answer> 并不是 special token，
-#   会被 BPE 拆成 3 个普通子词（如 '<' 'answer' '>'）。这导致模型学习
-#   "<answer>...</answer>" 这个格式边界比学 "<think>...</think>" 难得多，
-#   是 SFT 格式合规率低的一个重要根因。
+# Background: Qwen3 natively treats <think>/</think> as single special tokens,
+# but <answer>/</answer> are not special — the tokenizer splits them into ~3
+# sub-word tokens each ('<', 'answer', '>'). This makes the <answer>...</answer>
+# format boundary harder to learn during SFT compared to <think>...</think>, and
+# is a likely contributor to the low strict_format_rate on the Base route.
 #
-#   本脚本给 tokenizer 新增这两个 special token 并同步 resize 模型的
-#   embedding（新 token 的向量取「原始子词组合」embedding 的均值做初始化，
-#   而不是随机初始化，这样新 token 一开始就带有一定语义，收敛更快）。
+# New token embeddings are initialised as the mean of the original sub-word
+# embeddings (rather than random), giving the new tokens a sensible starting
+# point and faster convergence.
 #
-# 用法：
+# Usage:
 #   python add_answer_special_tokens.py \
 #       --base_model_path ../../model/Qwen3-0.6B-Base \
 #       --output_path ../models/base_with_answer_token/qwen3-0.6b
@@ -35,10 +34,10 @@ NEW_SPECIAL_TOKENS = ["<answer>", "</answer>"]
 
 
 def mean_pool_init_embedding(model, tokenizer, new_token: str, old_ids: list[int]) -> None:
-    """用旧 token 序列 embedding 的均值初始化新 special token 的 embedding。
+    """Initialise a new special-token embedding as the mean of the original sub-word embeddings.
 
-    对 输入 embedding（embed_tokens）和 输出 embedding（lm_head，若未 tie）
-    都做同样处理。
+    Applied to both the input embedding (embed_tokens) and the output embedding
+    (lm_head), if the weights are not tied.
     """
     new_id = tokenizer.convert_tokens_to_ids(new_token)
 
@@ -55,8 +54,8 @@ def mean_pool_init_embedding(model, tokenizer, new_token: str, old_ids: list[int
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base_model_path", required=True, help="原始 base 模型路径")
-    parser.add_argument("--output_path", required=True, help="新模型（含新增 special token）保存路径")
+    parser.add_argument("--base_model_path", required=True, help="path to the original base model")
+    parser.add_argument("--output_path", required=True, help="path to save the modified model")
     args = parser.parse_args()
 
     print(f"Loading tokenizer & model from {args.base_model_path} ...", flush=True)
@@ -65,7 +64,8 @@ def main():
         args.base_model_path, trust_remote_code=True, torch_dtype=torch.float32
     )
 
-    # 记录新 token 在“旧 tokenizer”下会被拆成哪些 token id，用于均值初始化
+    # Record how each new token is tokenized *before* adding it as a special token,
+    # so we can use those sub-word ids for mean-pool initialisation.
     old_ids_map = {}
     for tok in NEW_SPECIAL_TOKENS:
         ids = tokenizer.encode(tok, add_special_tokens=False)
@@ -84,7 +84,7 @@ def main():
         for tok in NEW_SPECIAL_TOKENS:
             mean_pool_init_embedding(model, tokenizer, tok, old_ids_map[tok])
 
-    # 验证编码结果
+    # Verify encoding after adding the special tokens
     for tok in NEW_SPECIAL_TOKENS:
         ids = tokenizer.encode(tok, add_special_tokens=False)
         print(f"After:  {tok!r} -> {ids} -> {tokenizer.convert_ids_to_tokens(ids)}")

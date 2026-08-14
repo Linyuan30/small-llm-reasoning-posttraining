@@ -1,19 +1,18 @@
 # Copyright (c) 2026
 #
-# 把 gsm8k_sft_coldstart.jsonl 与 math_sft_coldstart.jsonl（各约2000条）
-# 混合、切分成 train/val parquet，供 run_sft.sh 使用。
+# Merge gsm8k_sft_coldstart.jsonl and math_sft_coldstart.jsonl (~2000 records each),
+# split into train/val parquets for run_sft.sh.
 #
-# 每个来源各抽 val_size_per_source 条作为验证集，剩余合并作为训练集，
-# 与已有的 sft_coldstart_mix_train/val.parquet 构造逻辑保持一致
-# （各2000条 -> 各1900训练+100验证 -> 合并3800训练+200验证）。
+# Each source contributes val_size_per_source records to the val set; the rest form
+# the train set (default: 1900 train + 100 val per source → 3800 train + 200 val total).
 #
-# 用法（默认，主线格式）：
+# Usage (main-line format):
 #   python build_sft_mix.py \
 #       --inputs ../processed/gsm8k_sft_coldstart.jsonl ../processed/math_sft_coldstart.jsonl \
 #       --train_output ../processed/sft_coldstart_mix_train.parquet \
 #       --val_output ../processed/sft_coldstart_mix_val.parquet
 #
-# 用法（v2 变体，无 answer 标签格式）：
+# Usage (v2 plain-answer variant):
 #   python build_sft_mix.py \
 #       --inputs ../processed/gsm8k_sft_coldstart_v2_plain_answer.jsonl \
 #                ../processed/math_sft_coldstart_v2_plain_answer.jsonl \
@@ -30,10 +29,10 @@ import pandas as pd
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--inputs", nargs="+", required=True, help="一个或多个 SFT jsonl 文件路径")
+    parser.add_argument("--inputs", nargs="+", required=True, help="one or more SFT jsonl file paths")
     parser.add_argument("--train_output", required=True)
     parser.add_argument("--val_output", required=True)
-    parser.add_argument("--val_size_per_source", type=int, default=100, help="每个来源抽取多少条作为验证集")
+    parser.add_argument("--val_size_per_source", type=int, default=100, help="val records per source")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 

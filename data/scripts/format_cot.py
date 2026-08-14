@@ -1,15 +1,7 @@
 # Copyright (c) 2026
 #
-# 统一 <think>/<answer> 输出格式的公共工具函数
-# 对应 docs/流程.md 4.1 节：
-#   <think>
-#   （推理过程）
-#   </think>
-#   <answer>
-#   （最终数值答案）
-#   </answer>
-#
-# 供 prepare_gsm8k.py / prepare_math.py / build_sft_coldstart.py 共用。
+# Shared utilities for building <think>/<answer> formatted prompts and responses.
+# Used by prepare_gsm8k.py, prepare_math.py, and build_sft_mix.py.
 
 from __future__ import annotations
 
@@ -31,7 +23,7 @@ INSTRUCTION_SUFFIX = (
 
 
 def build_prompt_messages(question: str, add_system_prompt: bool = True) -> list[dict]:
-    """构造统一的 chat 格式 prompt，用于 RL(GRPO/PPO) 训练与评估阶段。"""
+    """Build a chat-format prompt for RL (GRPO/PPO) training and evaluation."""
     messages = []
     if add_system_prompt:
         messages.append({"role": "system", "content": SYSTEM_PROMPT})
@@ -45,10 +37,7 @@ def build_prompt_messages(question: str, add_system_prompt: bool = True) -> list
 
 
 def format_think_answer(reasoning: str, final_answer: str) -> str:
-    """把 (推理过程, 最终答案) 拼接成统一的 <think>/<answer> 格式字符串。
-
-    用于构造 SFT 冷启动数据的 assistant 回复。
-    """
+    """Combine (reasoning, answer) into a <think>/<answer> assistant reply for SFT."""
     reasoning = reasoning.strip()
     final_answer = str(final_answer).strip()
     return f"<think>\n{reasoning}\n</think>\n<answer>\n{final_answer}\n</answer>"
@@ -58,10 +47,10 @@ _GSM8K_CALC_ANNOTATION = re.compile(r"<<[^>]*>>")
 
 
 def clean_gsm8k_rationale(answer_raw: str) -> tuple[str, str]:
-    """把 GSM8K 原始 answer 字段（含 <<calc>> 标注和 '#### X' 结尾）
-    拆分为 (纯推理过程文本, 最终答案)。
+    """Split a raw GSM8K answer field (with <<calc>> annotations and '#### X' suffix)
+    into (rationale, final_answer).
     """
-    # 去掉计算器标注，如 "<<48/2=24>>"
+    # strip calculator annotations like "<<48/2=24>>"
     text = _GSM8K_CALC_ANNOTATION.sub("", answer_raw)
 
     if "####" in text:
@@ -75,7 +64,7 @@ def clean_gsm8k_rationale(answer_raw: str) -> tuple[str, str]:
 
 
 def extract_boxed_answer(solution: str) -> str | None:
-    """从 MATH 数据集官方 solution 文本中提取 \\boxed{...} 内的最终答案。"""
+    """Extract the content of the last \\boxed{...} in a MATH solution string."""
     idx = solution.rfind("\\boxed")
     if idx < 0:
         idx = solution.rfind("\\fbox")
@@ -83,7 +72,7 @@ def extract_boxed_answer(solution: str) -> str | None:
             return None
 
     i = idx
-    # 跳到第一个 '{'
+    # advance to the first '{'
     while i < len(solution) and solution[i] != "{":
         i += 1
     if i >= len(solution):
